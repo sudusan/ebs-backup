@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  AWS CloudFormation to setup the ec2 backup process. This takes backup of ebs
+  volume which are tagged with Backup and does the deletion of older snapshots
+Resources:
+  EC2SnapshotInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /
+      Roles:
+        - !Ref EC2SnapshotRole
+  EC2SnapshotPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: EC2SnapshotPolicy
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'ec2:CreateSnapshot'
+              - 'ec2:DeleteSnapshot'
+              - 'ec2:CreateTags'
+              - 'ec2:ModifySnapshotAttribute'
+              - 'ec2:ResetSnapshotAttribute'
+              - 'ec2:DescribeInstances'
+              - 'ec2:DescribeSnapshots'
+              - 'logs:PutLogEvents'
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+            Resource: '*'
+      Roles:
+        - !Ref EC2SnapshotRole
+  EC2SnapshotRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      RoleName: ADSK-lambda-ec2-backup-job-role
+      Path: /
+  ebsdailybackup:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      FunctionName: ebs-daily-backup
+      Role: !GetAtt 
+        - EC2SnapshotRole
+        - Arn
+      Code:
+        S3Bucket: lambda-ec2-backup-us-east
+        S3Key: ebs-backup.zip
+      Runtime: python2.7
+      Timeout: 25
+  ebssnapshotcleanup:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      FunctionName: ebs-snapshot-cleanup
+      Role: !GetAtt 
+        - EC2SnapshotRole
+        - Arn
+      Code:
+        S3Bucket: lambda-ec2-backup-us-east
+        S3Key: ebs-snapshot-cleanup.zip
+      Runtime: python2.7
+      Timeout: 25
+  ScheduledRule1:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: ebsdailybackup
+      ScheduleExpression: cron(15 12 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt 
+            - ebsdailybackup
+            - Arn
+          Id: TargetFunctionV1
+  ScheduledRule2:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: ebs-snapshot-cleanup
+      ScheduleExpression: cron(45 12 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt 
+            - ebssnapshotcleanup
+            - Arn
+          Id: TargetFunctionV2
+  PermissionForEventsToInvokeLambda1:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !Ref ebsdailybackup
+      Action: 'lambda:InvokeFunction'
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt 
+        - ScheduledRule1
+        - Arn
+  PermissionForEventsToInvokeLambda2:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !Ref ebssnapshotcleanup
+      Action: 'lambda:InvokeFunction'
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt 
+        - ScheduledRule2
+        - Arn

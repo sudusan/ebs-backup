@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: A Template to define Venafi ec2 deployment in AWS.
+  - Not intended for multi-region deployments. 
+
+Parameters: 
+  SDB:
+    Type: String
+    Default: '/delwiki/prd/dev/sdb'
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  VpcId:
+    Description: ID of an existing VPC
+    Type: AWS::EC2::VPC::Id
+  SubnetID1:
+    Description: Subnet ID to deploy to
+    Type: AWS::EC2::Subnet::Id
+    ConstraintDescription: must be the name of an existing subnet in a VPC.
+  SubnetID2:
+    Description: Subnet ID to deploy to
+    Type: AWS::EC2::Subnet::Id
+    ConstraintDescription: must be the name of an existing subnet in a VPC.
+  AZ1:
+    Description: AvailabilityZone1
+    Type: AWS::EC2::AvailabilityZone::Name
+    ConstraintDescription: must be the name of an existing AZ
+  AZ2:
+    Description: AvailabilityZone1
+    Type: AWS::EC2::AvailabilityZone::Name
+    ConstraintDescription: must be the name of an existing AZ
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t2.large
+    AllowedValues:
+    - t1.micro
+    - t2.nano
+    - t2.micro
+    - t2.small
+    - t2.medium
+    - t2.large
+    ConstraintDescription: must be a valid EC2 instance type.
+  AMIID:
+    Description: Type the AMI id
+    Type: String
+    Default: ami-00eb20669e0990cb4
+  
+
+Resources: 
+  ApplicationEC2SG:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: EC2 Server Security Group
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3389
+          ToPort: 3389
+          CidrIp: 10.0.0.0/8
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 10.0.0.0/8
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+    
+  WebServerLaunchConfig01:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId:
+        Ref: AMIID
+      InstanceType:
+        Ref: InstanceType
+      SecurityGroups:
+      - Ref: ApplicationEC2SG
+      IamInstanceProfile:
+        Ref: SMInstanceProfile
+      KeyName:
+        Ref: KeyName
+      BlockDeviceMappings: 
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp2
+            VolumeSize: 30
+            DeleteOnTermination: true
+            Encrypted: true
+        - DeviceName: /dev/sdb
+          Ebs:
+            VolumeType: gp2
+            VolumeSize: 60
+            DeleteOnTermination: true
+            Encrypted: true
+            SnapshotId: !Sub '{{resolve:ssm:${SDB}:1}}'
+            
+  
+  WebServerASG01:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: WebServerASG01
+      AvailabilityZones:
+      - Ref: AZ1
+      - Ref: AZ2
+      VPCZoneIdentifier:
+      - Ref: SubnetID1
+      - Ref: SubnetID2
+      DesiredCapacity: '1'
+      HealthCheckGracePeriod: 180
+      HealthCheckType: EC2
+      LaunchConfigurationName:
+        Ref: WebServerLaunchConfig01
+      MinSize: '1'
+      MaxSize: '1'
+      Tags:
+      - Key: Name
+        Value: delwiki-prd-asg-1
+        PropagateAtLaunch: true
+      - Key: Backup
+        Value: Backup
+        PropagateAtLaunch: true
+      - Key: Retention 
+        Value: '5'
+        PropagateAtLaunch: true
+  
+  SMInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: SMProfile
+      Path: "/"
+      Roles:
+      - Ref: SMRole
+  SMPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: SMPolicy
+      PolicyDocument:
+        Statement:
+        - Effect: Allow
+          Action:
+          - secretsmanager:GetSecretValue
+          Resource: "*"
+      Roles:
+      - Ref: SMRole
+  SMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
