@@ -3,9 +3,6 @@ Description: A Template to define Venafi ec2 deployment in AWS.
   - Not intended for multi-region deployments. 
 
 Parameters: 
-  SDB:
-    Type: String
-    Default: '/delwiki/prd/dev/sdb'
   KeyName:
     Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
     Type: AWS::EC2::KeyPair::KeyName
@@ -88,16 +85,21 @@ Resources:
         - DeviceName: /dev/xvda
           Ebs:
             VolumeType: gp2
-            VolumeSize: 30
+            VolumeSize: 8
             DeleteOnTermination: true
             Encrypted: true
         - DeviceName: /dev/sdb
           Ebs:
             VolumeType: gp2
-            VolumeSize: 60
+            VolumeSize: 10
             DeleteOnTermination: true
             Encrypted: true
-            SnapshotId: !Sub '{{resolve:ssm:${SDB}:1}}'
+        - DeviceName: /dev/sdc
+          Ebs:
+            VolumeType: gp2
+            VolumeSize: 20
+            DeleteOnTermination: true
+            Encrypted: true
             
   
   WebServerASG01:

@@ -25,12 +25,12 @@ def update_asg(asgName, snapid):
     print('current launch config name:' + sourceLaunchConfig)
     responseLC = client.describe_launch_configurations(LaunchConfigurationNames=[sourceLaunchConfig])
     sourceBlockDevices = responseLC.get('LaunchConfigurations')[0]['BlockDeviceMappings']
-    print('Current LC block devices:')
-    print(sourceBlockDevices[0]['Ebs'])
-
-    sourceBlockDevices[0]['Ebs']['SnapshotId'] = snapid
-    print('New LC block devices (snapshotID changed):')
-    print(sourceBlockDevices[0]['Ebs'])
+    for idx, dev in enumerate(sourceBlockDevices):
+        print(dev)
+        dev_name = dev['DeviceName']
+        if dev_name == '/dev/xvda':
+            continue
+        sourceBlockDevices[idx]['Ebs']['SnapshotId'] = snapid[dev_name][0]
 
     # create LC using instance from target ASG as a template, only diff is the name of the new LC and new AMI
     timeStamp = time.time()
@@ -70,6 +70,7 @@ def lambda_handler(event, context):
     print ("Found %d instances that need backing up" % len(instances))
 
     to_tag = collections.defaultdict(list)
+    to_snap = collections.defaultdict(list)
 
     for instance in instances:
         try:
@@ -94,7 +95,7 @@ def lambda_handler(event, context):
             )
             # update autoscaling group's launch config with new snapshot id
             snapid = snap['SnapshotId']
-            asgUpdateResponse = update_asg(targetASG, snapid)
+            
 
             # add snapshot id to parameter store
             
@@ -104,6 +105,7 @@ def lambda_handler(event, context):
             #ssm.put_parameter(Name=parameterName, Value=snapid, Overwrite=True, Type='String')
 
             to_tag[retention_days].append(snapid)
+            to_snap[device_name].append(snapid)
 
             print ("Retaining snapshot %s of volume %s from instance %s for %d days" % (
                 snap['SnapshotId'],
@@ -111,7 +113,8 @@ def lambda_handler(event, context):
                 instance['InstanceId'],
                 retention_days,
             ))
-
+        asgUpdateResponse = update_asg(targetASG, to_snap)
+        print(asgUpdateResponse)
         for retention_days in to_tag.keys():
             delete_date = datetime.date.today() + datetime.timedelta(days=retention_days)
             delete_fmt = delete_date.strftime('%Y-%m-%d')
