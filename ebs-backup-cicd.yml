@@ -2,6 +2,11 @@ AWSTemplateFormatVersion: 2010-09-09
 Description: >-
   AWS CloudFormation to setup the ec2 backup process. This takes backup of ebs
   volume which are tagged with Backup and does the deletion of older snapshots
+Parameters:
+ AutoscalingGroupName:
+  Description: 'Name of the autoscaling group'
+  Type: String
+  Default: WebServerASG01
 Resources:
   EC2SnapshotInstanceProfile:
     Type: 'AWS::IAM::InstanceProfile'
@@ -24,6 +29,7 @@ Resources:
               - 'ec2:ResetSnapshotAttribute'
               - 'ec2:DescribeInstances'
               - 'ec2:DescribeSnapshots'
+              - 'autoscaling:*'
               - 'logs:PutLogEvents'
               - 'logs:CreateLogGroup'
               - 'logs:CreateLogStream'
@@ -45,32 +51,22 @@ Resources:
               - 'sts:AssumeRole'
       RoleName: ADSK-lambda-ec2-backup-job-role
       Path: /
-  ebsdailybackup:
+  AutoscalingGroupUpdate:
     Type: 'AWS::Lambda::Function'
     Properties:
-      Handler: index.lambda_handler
-      FunctionName: ebs-daily-backup
+      Handler: lambda_function.lambda_handler
+      FunctionName: autoscaling_group_update
       Role: !GetAtt 
         - EC2SnapshotRole
         - Arn
       Code:
-        S3Bucket: lambda-ec2-backup-us-east
-        S3Key: ebs-backup.zip
-      Runtime: python2.7
-      Timeout: 25
-  ebssnapshotcleanup:
-    Type: 'AWS::Lambda::Function'
-    Properties:
-      Handler: index.lambda_handler
-      FunctionName: ebs-snapshot-cleanup
-      Role: !GetAtt 
-        - EC2SnapshotRole
-        - Arn
-      Code:
-        S3Bucket: lambda-ec2-backup-us-east
-        S3Key: ebs-snapshot-cleanup.zip
-      Runtime: python2.7
-      Timeout: 25
+        S3Bucket: sudsanka2019
+        S3Key: update_asg_ebs_snapshot.zip
+      Runtime: python3.7
+      Timeout: 300
+      Environment:
+        Variables:
+          ASG_NAME: !Ref 'AutoscalingGroupName'
   ScheduledRule1:
     Type: 'AWS::Events::Rule'
     Properties:
@@ -79,35 +75,15 @@ Resources:
       State: ENABLED
       Targets:
         - Arn: !GetAtt 
-            - ebsdailybackup
+            - AutoscalingGroupUpdate
             - Arn
           Id: TargetFunctionV1
-  ScheduledRule2:
-    Type: 'AWS::Events::Rule'
-    Properties:
-      Description: ebs-snapshot-cleanup
-      ScheduleExpression: cron(45 12 * * ? *)
-      State: ENABLED
-      Targets:
-        - Arn: !GetAtt 
-            - ebssnapshotcleanup
-            - Arn
-          Id: TargetFunctionV2
   PermissionForEventsToInvokeLambda1:
     Type: 'AWS::Lambda::Permission'
     Properties:
-      FunctionName: !Ref ebsdailybackup
+      FunctionName: !Ref AutoscalingGroupUpdate
       Action: 'lambda:InvokeFunction'
       Principal: events.amazonaws.com
       SourceArn: !GetAtt 
         - ScheduledRule1
-        - Arn
-  PermissionForEventsToInvokeLambda2:
-    Type: 'AWS::Lambda::Permission'
-    Properties:
-      FunctionName: !Ref ebssnapshotcleanup
-      Action: 'lambda:InvokeFunction'
-      Principal: events.amazonaws.com
-      SourceArn: !GetAtt 
-        - ScheduledRule2
         - Arn
