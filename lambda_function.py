@@ -7,7 +7,6 @@ import collections
 import time
 
 ec2 = boto3.client('ec2')
-ssm = boto3.client('ssm')
 
 def update_asg(asgName, snapid):
     # get autoscaling client
@@ -95,14 +94,6 @@ def lambda_handler(event, context):
             )
             # update autoscaling group's launch config with new snapshot id
             snapid = snap['SnapshotId']
-            
-
-            # add snapshot id to parameter store
-            
-            #parameterName = '/' + application_name + '/' + environment + device_name 
-            #print("Parameter Name: %s" %(parameterName))
-            #ssm.delete_parameter(Name=parameterName)
-            #ssm.put_parameter(Name=parameterName, Value=snapid, Overwrite=True, Type='String')
 
             to_tag[retention_days].append(snapid)
             to_snap[device_name].append(snapid)
