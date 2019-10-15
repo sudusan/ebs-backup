@@ -1,0 +1,214 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS CloudFormation to create a new EC2 instance with LB
+Parameters:
+  ApplicationName:
+    Type: String
+    Default: Featurecam
+  EnvironmentClass:
+    Type: String
+    Default: prd   
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable RDP access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  VpcID:
+    Description: ID of an existing VPC
+    Type: AWS::EC2::VPC::Id
+  SubnetID:
+    Description: Subnet ID to deploy EC2
+    Type: List<AWS::EC2::Subnet::Id>
+    ConstraintDescription: must be the name of an existing subnet in a VPC.
+  AZ:
+    Description: AvailabilityZone
+    Type: List<AWS::EC2::AvailabilityZone::Name>
+    ConstraintDescription: must be the name of an existing AZ
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t2.large
+    AllowedValues:
+    - t2.small
+    - t2.medium
+    - t2.large
+    - cc2.8xlarge
+    ConstraintDescription: must be a valid EC2 instance type.
+Mappings:
+  AWSInstanceType2Arch:
+    t2.small:
+      Arch: HVM64
+    t2.medium:
+      Arch: HVM64
+    t2.large:
+      Arch: HVM64
+    cc2.8xlarge:
+      Arch: HVM64
+  AWSRegionArch2AMI:
+    us-west-2:
+      HVM64: ami-0e65e5829cd5a9dcd
+Resources:
+  ServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: "Security Group to allow access to EC2"
+      SecurityGroupIngress: #Locks Access utilizing RDP/SSH/Direct IP
+      - IpProtocol: "tcp"
+        FromPort: '3389'
+        ToPort: '3389'
+        CidrIp: "10.0.0.0/8"
+      - IpProtocol: tcp
+        FromPort: '3690'
+        ToPort: '3690'
+        CidrIp: 10.0.0.0/8
+      Tags:
+        - Key: EnvironmentClass
+          Value: !Ref EnvironmentClass
+        - Key: ApplicationName
+          Value: !Ref ApplicationName  
+      VpcId: !Ref VpcID
+  
+  SimpleConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          files:
+            c:\cfn\cfn-hup.conf:
+              content:
+                Fn::Join:
+                - ''
+                - - "[main]\n"
+                  - stack=
+                  - Ref: AWS::StackId
+                  - "\n"
+                  - region=
+                  - Ref: AWS::Region
+                  - "\n"
+            c:\cfn\hooks.d\cfn-auto-reloader.conf:
+              content:
+                Fn::Join:
+                - ''
+                - - "[cfn-auto-reloader-hook]\n"
+                  - 'triggers=post.update'
+                  - 'path=Resources.SimpleConfig.Metadata.AWS::CloudFormation::Init'
+                  - 'action=cfn-init.exe -v -s '
+                  - Ref: AWS::StackId
+                  - " -r SimpleConfig"
+                  - " --region "
+                  - Ref: AWS::Region
+                  - "\n"
+
+          commands:
+            11-Pull-awsclient:
+              command: powershell.exe -Command Invoke-WebRequest -Uri https://s3.amazonaws.com/aws-cli/AWSCLI64PY3.msi -Outfile c:\AWSCLI6PY3.msi
+              waitAfterCompletion: '50'
+            12-install-awscli:
+              command: powershell.exe -Command Start-Process C:\AWSCLI6PY3.msi /quiet -wait
+              waitAfterCompletion: '50'
+              
+          services:
+            windows:
+              cfn-hup:
+                enabled: 'true'
+                ensureRunning: 'true'
+                files:
+                - c:\cfn\cfn-hup.conf
+                - c:\cfn\hooks.d\cfn-auto-reloader.conf
+    Properties:
+      ImageId:
+        Fn::FindInMap:
+        - AWSRegionArch2AMI
+        - Ref: AWS::Region
+        - Fn::FindInMap:
+          - AWSInstanceType2Arch
+          - Ref: InstanceType
+          - Arch
+      InstanceType:
+        Ref: InstanceType
+      SecurityGroups:
+      - Ref: ServerSecurityGroup
+      KeyName:
+        Ref: KeyName
+      IamInstanceProfile:
+        Ref: AttachS3InstanceProfile
+
+      UserData:
+        Fn::Base64:
+         !Sub |
+            <powershell>
+            $instanceId = Invoke-RestMethod -Uri http://169.254.169.254/latest/meta-data/instance-id
+            $AZid = Invoke-RestMethod -Uri http://169.254.169.254/latest/meta-data/placement/availability-zone
+            $snapid = (Get-SSMParameterValue -Name '/${ApplicationName}/${EnvironmentClass}/dev/sdc').Parameters.Value
+            $volid = (New-EC2Volume -SnapshotId $snapid -Size 20 -AvailabilityZone $AZid -VolumeType gp2).VolumeId
+            Start-Sleep -Seconds 60
+            Add-EC2Volume -InstanceId $instanceId -VolumeId $volid -Device /dev/sdc
+            Start-Sleep -Seconds 30
+            Get-Disk | %{ Set-Disk -Number $_.Number -IsOffline $False}
+            Set-Disk -Number 1 -IsReadonly $False
+            cfn-init.exe -v -s ${AWS::StackId} -r SimpleConfig --region ${AWS::Region}
+            </powershell>
+  
+  AttachS3InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: AttachS3InstanceProfile
+      Path: "/"
+      Roles:
+      - Ref: AttachS3Role
+  EC2Policy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: EC2Policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - s3:*
+          - ssm:*
+          - ec2:*
+          - secretsmanager:GetSecretValue
+          Resource: "*"
+  AttachS3Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+            - delivery.logs.amazonaws.com
+            - ssm.amazonaws.com
+            - sns.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+                - 'arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM'
+                - 
+                    Ref: EC2Policy
+      Path: "/"
+  FeaturecamASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AvailabilityZones:
+        Ref: AZ
+      VPCZoneIdentifier:
+        Ref: SubnetID
+      DesiredCapacity: '1'
+      HealthCheckGracePeriod: 180
+      HealthCheckType: EC2
+      LaunchConfigurationName:
+        Ref: SimpleConfig
+      MinSize: '1'
+      MaxSize: '1'
+      Tags:
+      - Key: Name
+        Value: featurecam-prd-instance
+        PropagateAtLaunch: true
+      - Key: tag:EBSSync-SSM
+        Value: 'true'
+        PropagateAtLaunch: true
+      - Key: Backup
+        Value: 'Backup'
+        PropagateAtLaunch: true
