@@ -1,12 +1,17 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: >-
   AWS CloudFormation to setup the ec2 backup process. This takes backup of ebs
-  volume which are tagged with Backup and does the deletion of older snapshots
+  volume which are tagged with Backup, adds the snapshot id to the parameter store, and does the deletion of older snapshots
+  Replace PUT_NAME_OF_BUCKET_HERE with the actual bucket name
 Parameters:
- AutoscalingGroupName:
-  Description: 'Name of the autoscaling group'
+ ApplicationName:
+  Description: 'Name of the application'
   Type: String
-  Default: WebServerASG01
+  Default: myapp
+ EnvironmentClass:
+  Description: 'Environment of the application'
+  Type: String
+  Default: prd
 Resources:
   EC2SnapshotInstanceProfile:
     Type: 'AWS::IAM::InstanceProfile'
@@ -51,7 +56,7 @@ Resources:
               - 'sts:AssumeRole'
       RoleName: ADSK-lambda-ec2-backup-job-role
       Path: /
-  AutoscalingGroupUpdate:
+  EBSBackupLambda:
     Type: 'AWS::Lambda::Function'
     Properties:
       Handler: lambda_function.lambda_handler
@@ -60,13 +65,14 @@ Resources:
         - EC2SnapshotRole
         - Arn
       Code:
-        S3Bucket: sudsanka2019
-        S3Key: update_asg_ebs_snapshot.zip
+        S3Bucket: PUT_NAME_OF_BUCKET_HERE
+        S3Key: ebs_snap_ps.zip
       Runtime: python3.7
       Timeout: 300
       Environment:
         Variables:
-          ASG_NAME: !Ref 'AutoscalingGroupName'
+          APPLICATION_NAME: !Ref 'ApplicationName'
+          ENVIRONMENT: !Ref 'EnvironmentClass'
   ScheduledRule1:
     Type: 'AWS::Events::Rule'
     Properties:
@@ -75,13 +81,13 @@ Resources:
       State: ENABLED
       Targets:
         - Arn: !GetAtt 
-            - AutoscalingGroupUpdate
+            - EBSBackupLambda
             - Arn
           Id: TargetFunctionV1
   PermissionForEventsToInvokeLambda1:
     Type: 'AWS::Lambda::Permission'
     Properties:
-      FunctionName: !Ref AutoscalingGroupUpdate
+      FunctionName: !Ref EBSBackupLambda
       Action: 'lambda:InvokeFunction'
       Principal: events.amazonaws.com
       SourceArn: !GetAtt 

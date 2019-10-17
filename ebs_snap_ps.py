@@ -1,4 +1,6 @@
-# Backup all in-use volumes in all regions
+# Backup all in-use volumes for an ec2 instance with tag=Backup, and store the snapshot-id in paramter store
+# this function takes in 2 environment parameters - APPLICATION_NAME and ENVIRONMENT. 
+# the key for the snapshot in the parameter store is: /APPLICATION_NAME/ENVIRONMENT/DEVICE_NAME
 
 import boto3
 import datetime
